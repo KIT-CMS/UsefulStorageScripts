@@ -133,7 +133,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--logfile",
         type=str,
-        default="/ceph/akhmet/logfile_copy_with_gfal.txt",
+        default=f"/ceph/{os.environ["USER"]}/logfile_copy_with_gfal.txt",
         help="Path to the logfile used by this script.",
     )
     parser.add_argument(
