@@ -14,7 +14,7 @@ def parse_args():
     parser.add_argument("--main_directory", required=True, help="Main directory containing ntuples and friends.")
     parser.add_argument("--filelist", required=True, help="File containing list of ROOT files.")
     parser.add_argument("--tree", required=True, help="Name of the tree to process.")
-    parser.add_argument("--allowed_friends", nargs='*', default=[], help="List of allowed friend trees.")
+    parser.add_argument("--allowed_friends", nargs='*', help="List of allowed friend trees.")
     parser.add_argument("--n_threads", type=int, default=4, help="Number of parallel threads to be used for merging.")
     parser.add_argument("--logfile", type=str, default="logfile_merge.txt", help="Path to the logfile used by this script.")
     return parser.parse_args()
