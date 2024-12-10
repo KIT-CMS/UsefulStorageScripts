@@ -2,27 +2,17 @@
 
 import argparse
 import os
-import ROOT as r
 import uproot
-import numpy as np
 import pandas as pd
 from natsort import natsorted
 
-
-main_directory = "input_files/CROWN/ntuples/11_07_24_alleras_allch/"
-main_ntuples_directory = os.path.join(main_directory, "CROWNRun")
-friends_directory = os.path.join(main_directory, "CROWNFriends")
-filelist = "rschmieder_files_Run2018CD_SingleMuon_mmt_local.txt"
-tree = "ntuple"
-allowed_friends = [
-    "crosssection",
-    "jetfakes_wpVSjet_Loose_30_08_24_LoosevsJetsvsL",
-    "jetfakes_wpVSjet_Loose_11_10_24_LoosevsJetsvsL_measure_njetclosure",
-    "jetfakes_wpVSjet_Loose_11_10_24_LoosevsJetsvsL_measure_metclosure",
-    "met_unc_22_10_24",
-    "pt_1_unc_22_10_24",
-    "nn_friends_18_07_24_LoosevsJL",
-]
+def parse_args():
+    parser = argparse.ArgumentParser(description="Merge CROWN ntuples and friends.")
+    parser.add_argument("--main_directory", required=True, help="Main directory containing ntuples and friends.")
+    parser.add_argument("--filelist", required=True, help="File containing list of ROOT files.")
+    parser.add_argument("--tree", required=True, help="Name of the tree to process.")
+    parser.add_argument("--allowed_friends", nargs='*', help="List of allowed friend trees.")
+    return parser.parse_args()
 
 def is_subpath(path, base):
     try:
@@ -33,10 +23,9 @@ def is_subpath(path, base):
 
 def get_files(filelist):
     with open(filelist, "r") as f:
-        return [l.strip().split()[0] for l in f.readlines()]
+        return natsorted([l.strip().split()[0] for l in f.readlines()])
 
-
-def determine_job_from_file(f):
+def determine_job_from_file(f, main_ntuples_directory, friends_directory):
     if is_subpath(f, main_ntuples_directory):
         rel_file_path = os.path.relpath(f, main_ntuples_directory)
         job_dir, file_name = os.path.split(rel_file_path)
@@ -49,7 +38,7 @@ def determine_job_from_file(f):
     else:
         return "UNKNOWN", "UNKNOWN", f
 
-def check_event_consistency_across_filetypes(job_dict):
+def check_event_consistency_across_filetypes(job_dict, tree):
     consistency_dict = {}
     for filetype, job_files in job_dict.items():
         for fname in job_files:
@@ -67,7 +56,7 @@ def check_event_consistency_across_filetypes(job_dict):
             return False
     return True
 
-def merge_ntuples(job, job_dict):
+def merge_ntuples(job, job_dict, tree):
     df_dict = {}
     output_file_name = job.replace("/", "_") + "_merged.root"    
     for filetype, files in job_dict.items():
@@ -79,25 +68,32 @@ def merge_ntuples(job, job_dict):
                 df = t.arrays(library="pd")
                 df_dict[filetype] = pd.concat([df_dict[filetype], df])
     merged_df = pd.concat(df_dict.values(), axis=1)
-    with uproot.recreate(output_file_name) as out:
-        out[tree] = merged_df
+
+    # Write the merged DataFrame to a new ROOT file using uproot
+    with uproot.recreate(output_file_name) as f:
+        f[tree] = merged_df
 
 if __name__ == "__main__":
-    flist = get_files(filelist)
+    args = parse_args()
+
+    ntuples_directory = os.path.join(args.main_directory, "CROWNRun")
+    friends_directory = os.path.join(args.main_directory, "CROWNFriends")
+
+    flist = get_files(args.filelist)
 
     merge_jobs_dict = {}
     for f in flist:
-        job, filetype, file_path = determine_job_from_file(f)
+        job, filetype, file_path = determine_job_from_file(f, ntuples_directory, friends_directory)
         if job not in merge_jobs_dict:
             merge_jobs_dict[job] = {}
         
-        if filetype == "ntuples" or filetype in allowed_friends:
+        if filetype == "ntuples" or filetype in args.allowed_friends:
             if filetype not in merge_jobs_dict[job]:
                 merge_jobs_dict[job][filetype] = []
             merge_jobs_dict[job][filetype].append(file_path)
 
     for job, job_dict in merge_jobs_dict.items():
-        print (f"Job: {job}")
+        print(f"Job: {job}")
         for filetype, files in job_dict.items():
             merge_jobs_dict[job][filetype] = natsorted(files)
             print(f"\t{filetype}:")
@@ -105,9 +101,10 @@ if __name__ == "__main__":
                 print(f"\t\t{f}")
 
     for job, job_dict in merge_jobs_dict.items():
-        if not check_event_consistency_across_filetypes(job_dict):
-            print("Error: Inconsistent number of events across filetypes for job {job}")
+        if not check_event_consistency_across_filetypes(job_dict, args.tree):
+            print(f"Error: Inconsistent number of events across filetypes for job {job}")
             exit(1)
         else:
             print(f"Job {job} is consistent in number of events across filetypes")
-            merge_ntuples(job, job_dict)
+            merge_ntuples(job, job_dict, args.tree)
+            print(f"Merged file created for job {job}")
