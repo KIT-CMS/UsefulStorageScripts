@@ -20,6 +20,7 @@ def parse_args():
     parser.add_argument("--n_threads", type=int, default=4, help="Number of parallel threads to be used for merging.")
     parser.add_argument("--logfile", type=str, default="logfile_merge.txt", help="Path to the logfile used by this script.")
     parser.add_argument("--remote_server", type=str, default="", help="Remote XRootD server URL to prepend to file paths.")
+    parser.add_argument("--run_nevents_check", action="store_true", help="Run a check to ensure the number of events is consistent across filetypes.")
     return parser.parse_args()
 
 def is_subpath(path, base):
@@ -147,12 +148,13 @@ def main():
     merge_task_queue = Queue()
 
     for job, job_dict in merge_jobs_dict.items():
-        if not check_event_consistency_across_filetypes(job_dict, args.tree, args.remote_server):
-            logger.error(f"Main: Inconsistent number of events across filetypes for job {job}")
-            exit(1)
-        else:
-            logger.info(f"Main: Job {job} is consistent in number of events across filetypes")
-            merge_task_queue.put((job, job_dict))
+        if args.run_nevents_check:
+            if not check_event_consistency_across_filetypes(job_dict, args.tree, args.remote_server):
+                logger.error(f"Main: Inconsistent number of events across filetypes for job {job}")
+                exit(1)
+            else:
+                logger.info(f"Main: Job {job} is consistent in number of events across filetypes")
+        merge_task_queue.put((job, job_dict))
     logger.info(f"Main: queue size: {merge_task_queue.qsize()}")
 
     worker_name_template = "merge_worker_{INDEX}"
