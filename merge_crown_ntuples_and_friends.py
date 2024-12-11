@@ -18,6 +18,7 @@ def parse_args():
     parser.add_argument("--allowed_friends", nargs='*', help="List of allowed friend trees.")
     parser.add_argument("--n_threads", type=int, default=4, help="Number of parallel threads to be used for merging.")
     parser.add_argument("--logfile", type=str, default="logfile_merge.txt", help="Path to the logfile used by this script.")
+    parser.add_argument("--remote_server", type=str, default="", help="Remote XRootD server URL to prepend to file paths.")
     return parser.parse_args()
 
 def is_subpath(path, base):
@@ -27,9 +28,12 @@ def is_subpath(path, base):
     except ValueError:
         return False
 
-def get_files(filelist):
+def get_files(filelist, remote_server):
     with open(filelist, "r") as f:
-        return natsorted([l.strip().split()[0] for l in f.readlines()])
+        files = [l.strip().split()[0] for l in f.readlines()]
+    if remote_server:
+        files = [remote_server.rstrip('/') + file for file in files]
+    return natsorted(files)
 
 def determine_job_from_file(f, main_ntuples_directory, friends_directory):
     if is_subpath(f, main_ntuples_directory):
@@ -115,7 +119,7 @@ def main():
     main_ntuples_directory = os.path.join(args.main_directory, "CROWNRun")
     friends_directory = os.path.join(args.main_directory, "CROWNFriends")
 
-    flist = get_files(args.filelist)
+    flist = get_files(args.filelist, args.remote_server)
 
     merge_jobs_dict = {}
     for f in flist:
