@@ -5,9 +5,10 @@ import os
 import uproot
 import pandas as pd
 from natsort import natsorted
-import asyncio
 import logging
 import datetime
+from concurrent.futures import ProcessPoolExecutor
+from queue import Queue
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Merge CROWN ntuples and friends.")
@@ -61,35 +62,32 @@ def check_event_consistency_across_filetypes(job_dict, tree):
             return False
     return True
 
-async def merge_ntuples(queue, worker_id, tree):
+def merge_ntuples(job, job_dict, tree, worker_id):
     logger = logging.getLogger(f"worker_{worker_id}")
-    logger.info(f"Worker {worker_id}: Activated")
-    while True:
-        job, job_dict = await queue.get()
-        if job is None:
-            queue.task_done()
-            break
-        logger.info(f"Worker {worker_id}: Starting merging process for job {job}")
-        df_dict = {}
-        output_file_name = job.replace("/", "_") + "_merged.root"
-        for filetype, files in job_dict.items():
-            if filetype not in df_dict:
-                df_dict[filetype] = pd.DataFrame()
-            for fname in files:
-                with uproot.open(fname) as f:
-                    t = f[tree]
-                    df = t.arrays(library="pd")
-                    df_dict[filetype] = pd.concat([df_dict[filetype], df])
-        merged_df = pd.concat(df_dict.values(), axis=1)
+    logger.info(f"Worker {worker_id}: Starting merging process for job {job}")
+    df_dict = {}
+    output_file_name = job.replace("/", "_") + "_merged.root"
+    for filetype, files in job_dict.items():
+        logger.info(f"Worker {worker_id}: Merging {filetype} files for job {job}")
+        if filetype not in df_dict:
+            df_dict[filetype] = pd.DataFrame()
+        for fname in files:
+            logger.info(f"Worker {worker_id}: Merging file {fname}")
+            with uproot.open(fname) as f:
+                t = f[tree]
+                df = t.arrays(library="pd")
+                df_dict[filetype] = pd.concat([df_dict[filetype], df])
+    logger.info(f"Worker {worker_id}: Merging {job} DataFrames")
+    merged_df = pd.concat(df_dict.values(), axis=1)
 
-        # Write the merged DataFrame to a new ROOT file using uproot
-        with uproot.recreate(output_file_name) as f:
-            f[tree] = merged_df
+    # Write the merged DataFrame to a new ROOT file using uproot
+    logger.info(f"Worker {worker_id}: Writing merged file for job {job}")
+    with uproot.recreate(output_file_name) as f:
+        f[tree] = merged_df
 
-        logger.info(f"Worker {worker_id}: Merged file created for job {job}")
-        queue.task_done()
+    logger.info(f"Worker {worker_id}: Merged file created for job {job}")
 
-async def main():
+def main():
     args = parse_args()
 
     logging.getLogger("asyncio").setLevel(logging.NOTSET)
@@ -138,18 +136,7 @@ async def main():
             for f in merge_jobs_dict[job][filetype]:
                 logger.info(f"Main: \t\t{f}")
 
-    merge_task_queue = asyncio.Queue()
-
-    worker_name_template = "merge_worker_{INDEX}"
-    merge_workers = []
-    nworkers = min(len(merge_jobs_dict), args.n_threads)
-    for i in range(nworkers):
-        worker = asyncio.create_task(
-            merge_ntuples(merge_task_queue, worker_name_template.format(INDEX=i), args.tree)
-        )
-        merge_workers.append(worker)
-
-    logger.info(f"Main: workers size: {len(merge_workers)}")
+    merge_task_queue = Queue()
 
     for job, job_dict in merge_jobs_dict.items():
         if not check_event_consistency_across_filetypes(job_dict, args.tree):
@@ -157,16 +144,26 @@ async def main():
             exit(1)
         else:
             logger.info(f"Main: Job {job} is consistent in number of events across filetypes")
-            await merge_task_queue.put((job, job_dict))
+            merge_task_queue.put((job, job_dict))
     logger.info(f"Main: queue size: {merge_task_queue.qsize()}")
 
-    logger.info(f"Main: joining queue")
-    await merge_task_queue.join()
-    logger.info(f"Main: joining queue finished")
-    for _ in range(nworkers):
-        await merge_task_queue.put((None, None))
-    await asyncio.gather(*merge_workers)
+    worker_name_template = "merge_worker_{INDEX}"
+    merge_workers = []
+    nworkers = min(len(merge_jobs_dict), args.n_threads)
+
+    with ProcessPoolExecutor(max_workers=nworkers) as executor:
+        while not merge_task_queue.empty():
+            job, job_dict = merge_task_queue.get()
+            worker_id = worker_name_template.format(INDEX=len(merge_workers))
+            future = executor.submit(merge_ntuples, job, job_dict, args.tree, worker_id)
+            merge_workers.append(future)
+
+    logger.info(f"Main: workers size: {len(merge_workers)}")
+
+    for future in merge_workers:
+        future.result()  # Wait for all workers to complete
+
     logger.info(f"Main: Merging finished")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
