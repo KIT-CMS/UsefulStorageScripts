@@ -3,6 +3,7 @@
 import argparse
 import os
 import uproot
+import ROOT as r
 import pandas as pd
 from natsort import natsorted
 import logging
@@ -49,22 +50,22 @@ def check_event_consistency_across_filetypes(job_dict, tree, remote_server):
     logger = logging.getLogger()
     consistency_dict = {}
     for filetype, job_files in job_dict.items():
+        consistency_dict[filetype] = 0
         for fname in job_files:
             if remote_server:
                 fname = remote_server.rstrip('/') + '//' + fname.lstrip('/')
-            if fname not in consistency_dict:
-                consistency_dict[fname] = {}
             logger.info(f"Main: Checking file {fname}")
-            with uproot.open(fname) as f:
-                t = f[tree]
-                consistency_dict[fname][filetype] = t.num_entries
+            checkfile = r.TFile.Open(fname)
+            checktree = checkfile.Get(tree)
+            consistency_dict[filetype] += checktree.GetEntries()
+            checkfile.Close()
     
-    for f, filetype_entries in consistency_dict.items():
-        if len(set(filetype_entries.values())) != 1:
-            print(f"Error: Inconsistent number of entries in files {f}")
-            for filetype, entries in filetype_entries.items():
-                print(f"\t{filetype}: {entries}")
-            return False
+    if len(set(consistency_dict.values())) != 1:
+        print(f"Error: Inconsistent number of entries in files {f}")
+        for filetype, entries in consistency_dict.items():
+            print(f"\t{filetype}: {entries}")
+        return False
+    logger.info(f"Main: Found {set(consistency_dict.values()).pop()} consistent events")
     return True
 
 def merge_ntuples(job, job_dict, tree, worker_id, remote_server):
