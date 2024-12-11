@@ -151,14 +151,14 @@ def main():
     merge_workers = []
     nworkers = min(len(merge_jobs_dict), args.n_threads)
 
+    logger.info(f"Main: maximum number of concurrent workers: {nworkers}")
+
     with ProcessPoolExecutor(max_workers=nworkers) as executor:
         while not merge_task_queue.empty():
             job, job_dict = merge_task_queue.get()
             worker_id = worker_name_template.format(INDEX=len(merge_workers))
             future = executor.submit(merge_ntuples, job, job_dict, args.tree, worker_id)
             merge_workers.append(future)
-
-    logger.info(f"Main: workers size: {len(merge_workers)}")
 
     for future in merge_workers:
         future.result()  # Wait for all workers to complete
