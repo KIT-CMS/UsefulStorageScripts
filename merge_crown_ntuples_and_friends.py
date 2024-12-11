@@ -28,12 +28,9 @@ def is_subpath(path, base):
     except ValueError:
         return False
 
-def get_files(filelist, remote_server):
+def get_files(filelist):
     with open(filelist, "r") as f:
-        files = [l.strip().split()[0] for l in f.readlines()]
-    if remote_server:
-        files = [remote_server.rstrip('/') + file for file in files]
-    return natsorted(files)
+        return natsorted([l.strip().split()[0] for l in f.readlines()])
 
 def determine_job_from_file(f, main_ntuples_directory, friends_directory):
     if is_subpath(f, main_ntuples_directory):
@@ -48,12 +45,16 @@ def determine_job_from_file(f, main_ntuples_directory, friends_directory):
     else:
         return "UNKNOWN", "UNKNOWN", f
 
-def check_event_consistency_across_filetypes(job_dict, tree):
+def check_event_consistency_across_filetypes(job_dict, tree, remote_server):
+    logger = logging.getLogger()
     consistency_dict = {}
     for filetype, job_files in job_dict.items():
         for fname in job_files:
+            if remote_server:
+                fname = remote_server.rstrip('/') + '//' + fname.lstrip('/')
             if fname not in consistency_dict:
                 consistency_dict[fname] = {}
+            logger.info(f"Main: Checking file {fname}")
             with uproot.open(fname) as f:
                 t = f[tree]
                 consistency_dict[fname][filetype] = t.num_entries
@@ -66,7 +67,7 @@ def check_event_consistency_across_filetypes(job_dict, tree):
             return False
     return True
 
-def merge_ntuples(job, job_dict, tree, worker_id):
+def merge_ntuples(job, job_dict, tree, worker_id, remote_server):
     logger = logging.getLogger(f"worker_{worker_id}")
     logger.info(f"Worker {worker_id}: Starting merging process for job {job}")
     df_dict = {}
@@ -76,6 +77,8 @@ def merge_ntuples(job, job_dict, tree, worker_id):
         if filetype not in df_dict:
             df_dict[filetype] = pd.DataFrame()
         for fname in files:
+            if remote_server:
+                fname = remote_server.rstrip('/') + '//' + fname.lstrip('/')
             logger.info(f"Worker {worker_id}: Merging file {fname}")
             with uproot.open(fname) as f:
                 t = f[tree]
@@ -119,7 +122,7 @@ def main():
     main_ntuples_directory = os.path.join(args.main_directory, "CROWNRun")
     friends_directory = os.path.join(args.main_directory, "CROWNFriends")
 
-    flist = get_files(args.filelist, args.remote_server)
+    flist = get_files(args.filelist)
 
     merge_jobs_dict = {}
     for f in flist:
@@ -143,7 +146,7 @@ def main():
     merge_task_queue = Queue()
 
     for job, job_dict in merge_jobs_dict.items():
-        if not check_event_consistency_across_filetypes(job_dict, args.tree):
+        if not check_event_consistency_across_filetypes(job_dict, args.tree, args.remote_server):
             logger.error(f"Main: Inconsistent number of events across filetypes for job {job}")
             exit(1)
         else:
@@ -161,7 +164,7 @@ def main():
         while not merge_task_queue.empty():
             job, job_dict = merge_task_queue.get()
             worker_id = worker_name_template.format(INDEX=len(merge_workers))
-            future = executor.submit(merge_ntuples, job, job_dict, args.tree, worker_id)
+            future = executor.submit(merge_ntuples, job, job_dict, args.tree, worker_id, args.remote_server)
             merge_workers.append(future)
 
     for future in merge_workers:
