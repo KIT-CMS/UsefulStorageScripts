@@ -58,6 +58,9 @@ def check_event_consistency_across_filetypes(job_dict, tree, remote_server):
             logger.info(f"Main: Checking file {fname}")
             checkfile = r.TFile.Open(fname)
             checktree = checkfile.Get(tree)
+            if not checktree:
+                logger.warning(f"Main: File {fname} does not contain the specified tree {tree} or is empty.")
+                continue
             consistency_dict[filetype] += checktree.GetEntries()
             checkfile.Close()
     
@@ -82,10 +85,17 @@ def merge_ntuples(job, job_dict, tree, worker_id, remote_server):
             if remote_server:
                 fname = remote_server.rstrip('/') + '//' + fname.lstrip('/')
             logger.info(f"Worker {worker_id}: Merging file {fname}")
-            with uproot.open(fname) as f:
-                t = f[tree]
-                df = t.arrays(library="pd")
-                df_dict[filetype] = pd.concat([df_dict[filetype], df])
+            try:
+                with uproot.open(fname) as f:
+                    if tree not in f:
+                        logger.warning(f"Worker {worker_id}: File {fname} does not contain the specified tree {tree} or is empty.")
+                        continue
+                    t = f[tree]
+                    df = t.arrays(library="pd")
+                    df_dict[filetype] = pd.concat([df_dict[filetype], df])
+            except Exception as e:
+                logger.warning(f"Worker {worker_id}: Failed to open file {fname} with error: {e}")
+                continue
     logger.info(f"Worker {worker_id}: Merging {job} DataFrames")
     merged_df = pd.concat(df_dict.values(), axis=1)
 
