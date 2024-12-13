@@ -56,13 +56,14 @@ def check_event_consistency_across_filetypes(job_dict, tree, remote_server):
             if remote_server:
                 fname = remote_server.rstrip('/') + '//' + fname.lstrip('/')
             logger.info(f"Main: Checking file {fname}")
-            checkfile = r.TFile.Open(fname)
-            checktree = checkfile.Get(tree)
-            if not checktree:
+            try:
+                checkfile = r.TFile.Open(fname)
+                checktree = checkfile.Get(tree)
+                consistency_dict[filetype] += checktree.GetEntries()
+                checkfile.Close()
+            except Exception as e:
                 logger.warning(f"Main: File {fname} does not contain the specified tree {tree} or is empty.")
                 continue
-            consistency_dict[filetype] += checktree.GetEntries()
-            checkfile.Close()
     
     if len(set(consistency_dict.values())) != 1:
         print(f"Error: Inconsistent number of entries in files {f}")
