@@ -3,12 +3,19 @@
 
 ## Example command
 
+### merge_crown_ntuples_and_friends.py
+
+A collection of files stored in `filelist.txt` containing `.root` files of the form `/store/user/${USER}/CROWN/ntuples/<TAG>/CROWNRun/<ERA>/<SAMPLE>/<CHANNEL>/*.root` can be merged, including possible friends, by using
+
 ```bash
 python3 merge_crown_ntuples_and_friends.py \
-  --main_directory input_files/CROWN/ntuples/11_07_24_alleras_allch/ \
-  --filelist rschmieder_files_Run2018CD_SingleMuon_mmt_local.txt \
-  --tree ntuple --allowed_friends crosssection jetfakes_wpVSjet_Loose_30_08_24_LoosevsJetsvsL \
-                                  jetfakes_wpVSjet_Loose_11_10_24_LoosevsJetsvsL_measure_njetclosure \
-                                  jetfakes_wpVSjet_Loose_11_10_24_LoosevsJetsvsL_measure_metclosure \
-                                  met_unc_22_10_24 pt_1_unc_22_10_24 nn_friends_18_07_24_LoosevsJL
+  --main_directory /store/user/${USER}/CROWN/ntuples/<TAG>/ \
+  --filelist filelist.txt \
+  --tree ntuple \
+  --allowed_friends <first_friend_name> <second_friend_name> <third_friend_name> \
+  --remote_server root://xrootd-cms.infn.it/ \
+  --run_nevents_check \
+  --n_threads 4
 ```
+
+`remote_server`should be specified to the location where the files are stored accordingly.
