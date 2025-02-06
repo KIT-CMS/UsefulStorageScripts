@@ -18,4 +18,4 @@ python3 merge_crown_ntuples_and_friends.py \
   --n_threads 4
 ```
 
-`--remote_server` should be specified to the XRootD endpoint where the files are stored accordingly (e.g. `root://cmsdcache-kit-disk.gridka.de`), or alternatively, to a redirector able to figure this out (e.g. `root://xrootd-cms.infn.it/`).
+`--remote_server` should be specified to the XRootD endpoint where the files are stored accordingly (e.g. `root://cmsdcache-kit-disk.gridka.de`), or alternatively, to a redirector able to figure this out (e.g. `root://xrootd-cms.infn.it`).
