@@ -1,6 +1,5 @@
 # UsefulStorageScripts
 
-
 ## Example command
 
 ### merge_crown_ntuples_and_friends.py
@@ -19,3 +18,14 @@ python3 merge_crown_ntuples_and_friends.py \
 ```
 
 `--remote_server` should be specified to the XRootD endpoint where the files are stored accordingly (e.g. `root://cmsdcache-kit-disk.gridka.de`), or alternatively, to a redirector able to figure this out (e.g. `root://xrootd-cms.infn.it`).
+
+## remove_files.py
+
+A utility was added to remove files on target storage using `gfal-rm`. It mirrors the behavior of `copy_files.py` but performs removals instead of copies. Example usage (use the davs PNFS path as your storage prefix):
+
+```bash
+python3 remove_files.py \
+  --filelist filelist.txt \
+  --storage-prefix davs://cmsdcache-kit-disk.gridka.de:2880/pnfs/gridka.de/cms/disk-only \
+  --n-threads 10 --dry-run
+```
