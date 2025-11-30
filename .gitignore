@@ -1,3 +1,6 @@
 input_files/*
 *.txt
 *.root
+*.csv
+*__pycache__*
+*chimera_202*
