@@ -28,7 +28,8 @@ async def execute_remove(queue, worker, dry_run):
             retcode = 1
             command = f"gfal-rm {dry_run_option} {target_filepath}"
             try:
-                while retcode:
+                # retcode 2 corresponds to MISSING file
+                while retcode and retcode != 2:
                     logger.info(f"{worker}: Remove command:\n{command}")
                     remove_process = await asyncio.create_subprocess_shell(
                         command,
