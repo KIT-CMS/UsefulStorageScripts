@@ -29,3 +29,43 @@ python3 remove_files.py \
   --storage-prefix davs://cmsdcache-kit-disk.gridka.de:2880/pnfs/gridka.de/cms/disk-only \
   --n-threads 10 --dry-run
 ```
+
+## stage_files.py
+
+Manages large-scale tape staging against a dCache instance via the WLCG Tape REST API v1. Handles the full lifecycle: locality pre-check, batch submission, progress polling, and automatic release (unpin) of completed files.
+
+**Requirements:** Python 3.12+, `requests` library (`pip install requests`).
+
+**Usage:**
+
+```bash
+python3 stage_files.py /path/to/workdir
+```
+
+The workdir must contain exactly one `.conf` file and a file list. Example `.conf`:
+
+```ini
+[dcache]
+base_url = https://dcache-host.example.org:3880
+api_path = /api/v1/tape
+batch_size = 2000
+disk_lifetime = P7D
+poll_interval = 300
+archiveinfo_batch_size = 5000
+auto_release = true
+
+[auth]
+# Falls back to $X509_USER_PROXY / /tmp/x509up_u<uid>
+proxy_cert =
+# Falls back to $X509_CERT_DIR / /etc/grid-security/certificates
+ca_dir =
+
+[files]
+filelist = filelist.txt
+state_file = stage_state.json
+
+[logging]
+log_file = stage_files.log
+```
+
+State is persisted to a JSON file (`stage_state.json`) so the script can be killed and restarted at any time. On restart it resumes from the last saved phase. Completed files are automatically released (unpinned) to free staging pool space, which is essential when the total file size exceeds the pool capacity.
