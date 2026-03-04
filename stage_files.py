@@ -22,11 +22,14 @@ import logging
 import math
 import os
 import signal
+import ssl
 import sys
 import tempfile
 import time
 
 import requests as http_requests
+from cryptography import x509
+from cryptography.hazmat.primitives.serialization import Encoding
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -50,7 +53,13 @@ TERMINAL_FILE_STATES = {FILE_COMPLETED, FILE_FAILED, FILE_CANCELLED}
 ONLINE_LOCALITIES = {"DISK", "DISK_AND_TAPE"}
 
 TRANSIENT_HTTP_CODES = {429, 500, 502, 503, 504}
+AUTH_ERROR_CODES = {401, 403}
 RETRY_DELAYS = [10, 30, 90]
+
+
+class AuthError(Exception):
+    """Raised on unrecoverable authentication/authorization failures."""
+
 
 # ---------------------------------------------------------------------------
 # Graceful shutdown
@@ -90,6 +99,7 @@ class Config:
         # [auth]
         self.proxy_cert = self._resolve_proxy(cp)
         self.ca_dir = self._resolve_ca_dir(cp)
+        self.proxy_lifetime_factor = cp.getfloat("auth", "proxy_lifetime_factor", fallback=2.0)
 
         # [files]
         self.filelist = os.path.join(workdir, cp.get("files", "filelist", fallback="filelist.txt"))
@@ -136,6 +146,50 @@ class Config:
 
 
 # ---------------------------------------------------------------------------
+# Proxy certificate lifetime helpers
+# ---------------------------------------------------------------------------
+
+def _get_proxy_expiry(proxy_path: str, logger: logging.Logger) -> datetime.datetime | None:
+    """Read the expiry time (notAfter) from a PEM proxy certificate.
+
+    Returns a timezone-aware UTC datetime, or None if parsing fails.
+    """
+    try:
+        with open(proxy_path, "rb") as f:
+            pem_data = f.read()
+        cert = x509.load_pem_x509_certificate(pem_data)
+        return cert.not_valid_after_utc
+    except Exception as exc:
+        logger.warning("Could not read proxy certificate expiry from %s: %s", proxy_path, exc)
+        return None
+
+
+def _check_proxy_lifetime(cfg: Config, logger: logging.Logger) -> None:
+    """Raise AuthError if the proxy is expired or about to expire.
+
+    The safety margin is ``proxy_lifetime_factor * poll_interval`` seconds.
+    """
+    expiry = _get_proxy_expiry(cfg.proxy_cert, logger)
+    if expiry is None:
+        return  # cannot determine — let the server decide
+
+    remaining = (expiry - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+    margin = cfg.proxy_lifetime_factor * cfg.poll_interval
+
+    if remaining <= 0:
+        raise AuthError(
+            f"Proxy certificate has expired ({expiry.isoformat()})"
+        )
+    if remaining < margin:
+        raise AuthError(
+            f"Proxy expires in {int(remaining)}s, below safety margin of {int(margin)}s "
+            f"(factor {cfg.proxy_lifetime_factor} × poll_interval {cfg.poll_interval}s). "
+            f"Expiry: {expiry.isoformat()}"
+        )
+    logger.info("Proxy certificate valid for %d more seconds (margin: %ds)", int(remaining), int(margin))
+
+
+# ---------------------------------------------------------------------------
 # HTTP client helpers
 # ---------------------------------------------------------------------------
 
@@ -163,6 +217,11 @@ def _request_with_retry(
     for attempt, delay in enumerate(RETRY_DELAYS + [0], start=1):
         try:
             resp = session.request(method, url, **kwargs)
+            if resp.status_code in AUTH_ERROR_CODES:
+                raise AuthError(
+                    f"HTTP {resp.status_code} from {method.upper()} {url}: "
+                    f"{resp.text[:300]}"
+                )
             if resp.status_code not in TRANSIENT_HTTP_CODES:
                 return resp
             logger.warning(
@@ -322,6 +381,7 @@ def phase_submit(cfg: Config, state: dict, session: http_requests.Session, logge
 
     submitted_count = 0
     while state["pending_files"] and not _shutdown_requested:
+        _check_proxy_lifetime(cfg, logger)
         batch = state["pending_files"][:batch_sz]
         files_payload = [{"path": p, "diskLifetime": cfg.disk_lifetime} for p in batch]
 
@@ -369,6 +429,8 @@ def phase_submit(cfg: Config, state: dict, session: http_requests.Session, logge
 def phase_poll_and_release(cfg: Config, state: dict, session: http_requests.Session, logger: logging.Logger) -> None:
     """Phase 4: poll request statuses and release completed files."""
     while not _shutdown_requested:
+        _check_proxy_lifetime(cfg, logger)
+
         active_requests = [
             rid for rid, rinfo in state["requests"].items()
             if rinfo["state"] not in {"COMPLETED", "CANCELLED"}
@@ -575,9 +637,10 @@ def main() -> None:
 
     logger.info("Starting stage_files with workdir: %s", workdir)
 
-    # Validate proxy cert exists
+    # Validate proxy cert exists and has sufficient lifetime
     if not os.path.isfile(cfg.proxy_cert):
         raise SystemExit(f"Proxy certificate not found: {cfg.proxy_cert}")
+    _check_proxy_lifetime(cfg, logger)
 
     # Create HTTP session
     session = _create_session(cfg)
@@ -602,27 +665,46 @@ def main() -> None:
         logger.info("Task already in terminal state: %s", state["overall_state"])
         return
 
-    # Phase 2: archiveinfo pre-check
-    if state["overall_state"] == OVERALL_NEW:
-        phase_archiveinfo(cfg, state, session, logger)
-        if _shutdown_requested:
-            logger.info("Shutdown after archiveinfo phase, state saved")
-            return
+    try:
+        # Phase 2: archiveinfo pre-check
+        if state["overall_state"] == OVERALL_NEW:
+            phase_archiveinfo(cfg, state, session, logger)
+            if _shutdown_requested:
+                logger.info("Shutdown after archiveinfo phase, state saved")
+                return
 
-    # Phase 3: submit batches
-    if state["overall_state"] == OVERALL_SUBMITTING:
-        phase_submit(cfg, state, session, logger)
-        if _shutdown_requested:
-            logger.info("Shutdown during submission phase, state saved")
-            return
+        # Phase 3: submit batches
+        if state["overall_state"] == OVERALL_SUBMITTING:
+            phase_submit(cfg, state, session, logger)
+            if _shutdown_requested:
+                logger.info("Shutdown during submission phase, state saved")
+                return
 
-    # Phase 4: poll and release
-    if state["overall_state"] == OVERALL_STAGING:
-        phase_poll_and_release(cfg, state, session, logger)
-        if _shutdown_requested:
-            _recompute_summary(state)
-            _save_state(state, cfg.state_file)
-            logger.info("Shutdown during polling phase, state saved")
+        # Phase 4: poll and release
+        if state["overall_state"] == OVERALL_STAGING:
+            phase_poll_and_release(cfg, state, session, logger)
+            if _shutdown_requested:
+                _recompute_summary(state)
+                _save_state(state, cfg.state_file)
+                logger.info("Shutdown during polling phase, state saved")
+
+    except AuthError as exc:
+        logger.error("Authentication failure: %s", exc)
+        logger.error("Saving state and shutting down — renew your proxy certificate and restart.")
+        state["stopped_reason"] = "auth_error"
+        state["stopped_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        _recompute_summary(state)
+        _save_state(state, cfg.state_file)
+        sys.exit(2)
+
+    except Exception as exc:
+        logger.error("Unexpected error: %s", exc, exc_info=True)
+        logger.error("Saving state and shutting down.")
+        state["stopped_reason"] = "unexpected_error"
+        state["stopped_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        _recompute_summary(state)
+        _save_state(state, cfg.state_file)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

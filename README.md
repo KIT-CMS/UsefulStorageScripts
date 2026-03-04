@@ -59,6 +59,8 @@ auto_release = true
 proxy_cert =
 # Falls back to $X509_CERT_DIR / /etc/grid-security/certificates
 ca_dir =
+# Stop gracefully when remaining proxy lifetime < factor × poll_interval (default: 2.0)
+proxy_lifetime_factor = 2.0
 
 [files]
 filelist = filelist.txt
@@ -69,3 +71,7 @@ log_file = stage_files.log
 ```
 
 State is persisted to a JSON file (`stage_state.json`) so the script can be killed and restarted at any time. On restart it resumes from the last saved phase. Completed files are automatically released (unpinned) to free staging pool space, which is essential when the total file size exceeds the pool capacity.
+
+The script monitors the X.509 proxy certificate lifetime and shuts down gracefully before it expires (configurable via `proxy_lifetime_factor`). HTTP 401/403 errors are also caught and trigger a clean shutdown with state saved.
+
+**Dependencies:** `requests`, `cryptography` (`pip install requests cryptography`).
