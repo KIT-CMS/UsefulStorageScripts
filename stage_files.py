@@ -350,7 +350,21 @@ def phase_archiveinfo(cfg: Config, state: dict, session: http_requests.Session, 
             still_pending.extend(batch)
             continue
 
-        for entry in resp.json():
+        results = resp.json()
+
+        # Guard against silent server-side truncation: dCache drops paths
+        # beyond frontend.service.wlcg.file-locality-max-files (default 10000)
+        # without any error.  Detect this and ensure no files are lost.
+        returned_paths = {entry.get("path", "") for entry in results}
+        for path in batch:
+            if path not in returned_paths:
+                logger.warning(
+                    "Archiveinfo response missing path (server-side truncation?): %s",
+                    path,
+                )
+                still_pending.append(path)
+
+        for entry in results:
             path = entry.get("path", "")
             locality = entry.get("locality", "")
             if locality in ONLINE_LOCALITIES:
