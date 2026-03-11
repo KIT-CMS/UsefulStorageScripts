@@ -52,11 +52,8 @@ FILE_CANCELLED = "CANCELLED"
 TERMINAL_FILE_STATES = {FILE_COMPLETED, FILE_FAILED, FILE_CANCELLED}
 ONLINE_LOCALITIES = {"DISK", "DISK_AND_TAPE"}
 
-# Grace period (in seconds) to wait after a file completes before releasing
-# This prevents race conditions where the pin is removed before the bulk
-# STAGE operation can properly complete and report success.
-# See: https://github.com/dcache/dcache/issues/...
-RELEASE_GRACE_PERIOD = int(os.environ.get("STAGING_RELEASE_GRACE_PERIOD", 120))
+# Grace period constants (defaults, can be overridden in config)
+DEFAULT_RELEASE_GRACE_PERIOD = 120  # seconds
 
 TRANSIENT_HTTP_CODES = {429, 500, 502, 503, 504}
 AUTH_ERROR_CODES = {401, 403}
@@ -101,6 +98,8 @@ class Config:
         self.poll_interval = cp.getint("dcache", "poll_interval", fallback=300)
         self.archiveinfo_batch_size = cp.getint("dcache", "archiveinfo_batch_size", fallback=5000)
         self.auto_release = cp.getboolean("dcache", "auto_release", fallback=True)
+        self.release_grace_period = cp.getint("dcache", "release_grace_period",
+                                               fallback=DEFAULT_RELEASE_GRACE_PERIOD)
 
         # [auth]
         self.proxy_cert = self._resolve_proxy(cp)
@@ -549,7 +548,7 @@ def _poll_single_request(
         if completed_at_str:
             completed_at = datetime.datetime.fromisoformat(completed_at_str)
             elapsed = (now - completed_at).total_seconds()
-            if elapsed >= RELEASE_GRACE_PERIOD:
+            if elapsed >= cfg.release_grace_period:
                 files_ready_for_release.append(path)
         else:
             # Fallback: release immediately if no completion time recorded
