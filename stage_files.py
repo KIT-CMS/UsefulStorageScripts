@@ -536,10 +536,15 @@ def _poll_single_request(
             local["completed_at"] = datetime.datetime.now().isoformat(timespec="seconds")
             newly_completed_paths.append(path)
 
-    # Check which completed files are ready for release (past grace period)
+    # Check ALL completed files (not just newly completed) for release eligibility
+    # This handles the case where files completed in previous cycles but haven't
+    # been released yet due to the grace period
     now = datetime.datetime.now()
-    for path in newly_completed_paths:
-        local = rinfo["files"][path]
+    for path, local in rinfo["files"].items():
+        # Skip if not completed or already released
+        if local["state"] != FILE_COMPLETED or local.get("released", False):
+            continue
+        
         completed_at_str = local.get("completed_at")
         if completed_at_str:
             completed_at = datetime.datetime.fromisoformat(completed_at_str)
@@ -548,6 +553,7 @@ def _poll_single_request(
                 files_ready_for_release.append(path)
         else:
             # Fallback: release immediately if no completion time recorded
+            # (shouldn't happen, but handle gracefully)
             files_ready_for_release.append(path)
 
     # Release files that have passed the grace period
