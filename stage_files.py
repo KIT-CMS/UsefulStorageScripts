@@ -52,6 +52,12 @@ FILE_CANCELLED = "CANCELLED"
 TERMINAL_FILE_STATES = {FILE_COMPLETED, FILE_FAILED, FILE_CANCELLED}
 ONLINE_LOCALITIES = {"DISK", "DISK_AND_TAPE"}
 
+# Grace period (in seconds) to wait after a file completes before releasing
+# This prevents race conditions where the pin is removed before the bulk
+# STAGE operation can properly complete and report success.
+# See: https://github.com/dcache/dcache/issues/...
+RELEASE_GRACE_PERIOD = int(os.environ.get("STAGING_RELEASE_GRACE_PERIOD", 120))
+
 TRANSIENT_HTTP_CODES = {429, 500, 502, 503, 504}
 AUTH_ERROR_CODES = {401, 403}
 RETRY_DELAYS = [10, 30, 90]
@@ -506,6 +512,7 @@ def _poll_single_request(
 
     data = resp.json()
     newly_completed_paths = []
+    files_ready_for_release = []
 
     for file_entry in data.get("files", []):
         path = file_entry.get("path", "")
@@ -524,13 +531,28 @@ def _poll_single_request(
         if error:
             local["error"] = error
 
-        # Detect newly completed
-        if local["state"] == FILE_COMPLETED and old_state != FILE_COMPLETED and not local.get("released", False):
+        # Detect newly completed - record the completion time
+        if local["state"] == FILE_COMPLETED and old_state != FILE_COMPLETED:
+            local["completed_at"] = datetime.datetime.now().isoformat(timespec="seconds")
             newly_completed_paths.append(path)
 
-    # Release newly completed files
-    if cfg.auto_release and newly_completed_paths:
-        _release_files(cfg, session, logger, request_id, newly_completed_paths, rinfo)
+    # Check which completed files are ready for release (past grace period)
+    now = datetime.datetime.now()
+    for path in newly_completed_paths:
+        local = rinfo["files"][path]
+        completed_at_str = local.get("completed_at")
+        if completed_at_str:
+            completed_at = datetime.datetime.fromisoformat(completed_at_str)
+            elapsed = (now - completed_at).total_seconds()
+            if elapsed >= RELEASE_GRACE_PERIOD:
+                files_ready_for_release.append(path)
+        else:
+            # Fallback: release immediately if no completion time recorded
+            files_ready_for_release.append(path)
+
+    # Release files that have passed the grace period
+    if cfg.auto_release and files_ready_for_release:
+        _release_files(cfg, session, logger, request_id, files_ready_for_release, rinfo)
 
     # Check if this request is fully terminal
     all_terminal = all(
